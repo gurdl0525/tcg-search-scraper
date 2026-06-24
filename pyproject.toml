@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onepiece-card-scraper"
+version = "0.1.0"
+description = "ONE PIECE CARD GAME official card list scraper for TCG Search batch jobs."
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.1",
+]
+
+[project.scripts]
+onepiece-card-scraper = "onepiece_card_scraper.scraper:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
