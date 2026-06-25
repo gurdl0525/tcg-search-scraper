@@ -133,6 +133,25 @@ class StorageTests(unittest.TestCase):
             "http://localhost:9000/tcg-search-local/onepiece/cards/OP16-001_p1.png",
         )
 
+    def test_upload_card_images_uses_language_scoped_key_prefix(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        storage = FakeStorage()
+
+        def fake_fetcher(url, timeout_seconds):
+            return DownloadedImage(body=b"image-bytes", content_type="image/png")
+
+        upload_card_images(
+            [card],
+            storage=storage,
+            image_fetcher=fake_fetcher,
+            key_prefix="onepiece/jp/cards",
+        )
+
+        self.assertEqual(
+            storage.uploads[0][0],
+            "onepiece/jp/cards/OP16-001_p1.png",
+        )
+
     def test_upload_card_images_skips_cards_without_image_url(self):
         card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
         card.image_url = None

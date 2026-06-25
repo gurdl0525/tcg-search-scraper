@@ -303,11 +303,11 @@ class OnePieceCardScraperTests(unittest.TestCase):
             write_jsonl(cards, input_path)
 
             def fake_upload(cards, storage, image_fetcher, key_prefix, timeout_seconds):
-                self.assertEqual(key_prefix, "cards")
+                self.assertEqual(key_prefix, "onepiece/jp/cards")
                 self.assertEqual(timeout_seconds, 4.0)
                 self.assertEqual(image_fetcher.keywords["max_attempts"], 9)
                 self.assertEqual(image_fetcher.keywords["retry_delay_seconds"], 3.0)
-                cards[0].image_url = "http://localhost:9000/tcg-search-local/cards/OP16-001_p1.png"
+                cards[0].image_url = "http://localhost:9000/tcg-search-local/onepiece/jp/cards/OP16-001_p1.png"
                 return ImageUploadStats(total=2, uploaded=1, skipped=1)
 
             with mock.patch("onepiece_card_scraper.storage.upload_card_images", side_effect=fake_upload):
@@ -316,8 +316,10 @@ class OnePieceCardScraperTests(unittest.TestCase):
                         "--input-jsonl",
                         str(input_path),
                         "--upload-images",
+                        "--language-code",
+                        "jp",
                         "--image-key-prefix",
-                        "cards",
+                        "onepiece/{language_code}/cards",
                         "--timeout",
                         "4",
                         "--image-retry-attempts",
@@ -337,7 +339,7 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(
             records[0]["image_url"],
-            "http://localhost:9000/tcg-search-local/cards/OP16-001_p1.png",
+            "http://localhost:9000/tcg-search-local/onepiece/jp/cards/OP16-001_p1.png",
         )
 
     def test_resolve_ca_file_prefers_environment_path(self):

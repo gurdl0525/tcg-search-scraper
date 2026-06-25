@@ -316,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout,
             ),
         )
+        image_key_prefix = args.image_key_prefix.format(language_code=args.language_code)
         image_stats = upload_card_images(
             cards,
             storage=storage,
@@ -324,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_attempts=args.image_retry_attempts,
                 retry_delay_seconds=args.image_retry_delay,
             ),
-            key_prefix=args.image_key_prefix,
+            key_prefix=image_key_prefix,
             timeout_seconds=args.timeout,
         )
         print(
@@ -445,8 +446,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--image-key-prefix",
-        default=os.environ.get("TCG_SEARCH_IMAGE_KEY_PREFIX", "onepiece/cards"),
-        help="Object key prefix for uploaded card images. Default: onepiece/cards.",
+        default=os.environ.get("TCG_SEARCH_IMAGE_KEY_PREFIX", "onepiece/{language_code}/cards"),
+        help="Object key prefix for uploaded card images. Default: onepiece/{language_code}/cards.",
     )
     parser.add_argument(
         "--image-retry-attempts",
