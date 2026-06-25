@@ -6,20 +6,32 @@ import csv
 from functools import partial
 import json
 import os
+import random
 import re
 import ssl
 import sys
+import time
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, TextIO
 from urllib.parse import urlencode, urljoin
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
 DEFAULT_BASE_URL = "https://onepiece-cardgame.com"
+ENGLISH_BASE_URL = "https://en.onepiece-cardgame.com"
+KOREAN_CARDLIST_URL = "https://onepiece-cardgame.kr/cardlist.do"
 CARDLIST_PATH = "/cardlist/"
 USER_AGENT = "tcg-search-onepiece-card-scraper/0.1"
+DEFAULT_LANGUAGE_CODES = ("jp", "en", "ko")
+LANGUAGE_BASE_URLS = {
+    "jp": DEFAULT_BASE_URL,
+    "en": ENGLISH_BASE_URL,
+    "ko": KOREAN_CARDLIST_URL,
+}
+TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 CA_BUNDLE_ENV_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
 COMMON_CA_BUNDLE_PATHS = (
     "/etc/ssl/cert.pem",
@@ -128,6 +140,12 @@ class SeriesOption:
     name: str
 
 
+@dataclass(frozen=True)
+class RunStats:
+    cards: int = 0
+    printings: int = 0
+
+
 class Node:
     def __init__(self, tag: str, attrs: dict[str, str] | None = None) -> None:
         self.tag = tag
@@ -181,18 +199,39 @@ class TreeBuilder(HTMLParser):
 
 
 def build_cardlist_url(base_url: str = DEFAULT_BASE_URL, series: str | None = None) -> str:
-    url = f"{base_url.rstrip('/')}{CARDLIST_PATH}"
+    url = _cardlist_root_url(base_url)
     if series:
         return f"{url}?{urlencode({'series': series})}"
     return url
 
 
-def fetch_html(url: str, timeout_seconds: float = 20.0) -> tuple[str, str]:
+def fetch_html(
+    url: str,
+    timeout_seconds: float = 20.0,
+    max_attempts: int = 6,
+    retry_delay_seconds: float = 2.0,
+    retry_jitter_ratio: float = 0.25,
+    opener=urlopen,
+    sleep=time.sleep,
+) -> tuple[str, str]:
     request = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=timeout_seconds, context=_ssl_context()) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        html = response.read().decode(charset, errors="replace")
-        return html, response.geturl()
+    attempts = max(1, max_attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            with opener(request, timeout=timeout_seconds, context=_ssl_context()) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                html = response.read().decode(charset, errors="replace")
+                return html, response.geturl()
+        except HTTPError as exc:
+            if exc.code not in TRANSIENT_HTTP_STATUS_CODES or attempt == attempts:
+                raise
+        except URLError:
+            if attempt == attempts:
+                raise
+
+        sleep(_retry_delay(retry_delay_seconds, attempt, retry_jitter_ratio))
+
+    raise AssertionError("unreachable")
 
 
 def discover_series_options(html: str, include_all: bool = False) -> list[SeriesOption]:
@@ -289,18 +328,49 @@ def write_csv_stream(cards: Iterable[OnePieceCardPrinting], output: TextIO) -> N
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
+    if args.all_languages:
+        language_codes = _language_codes(args.languages)
+        for index, language_code in enumerate(language_codes):
+            print(f"Starting {language_code} full-series crawl", file=sys.stderr)
+            args.language_code = language_code
+            args.base_url = LANGUAGE_BASE_URLS[language_code]
+            _run(args)
+            if args.language_cooldown_seconds > 0 and index < len(language_codes) - 1:
+                time.sleep(args.language_cooldown_seconds)
+        return 0
+
+    _run(args)
+    return 0
+
+
+def _run(args: argparse.Namespace) -> RunStats:
     if args.input_jsonl:
         cards = read_jsonl(Path(args.input_jsonl))
     elif args.all_series:
-        cards = crawl_all_series(base_url=args.base_url, timeout_seconds=args.timeout)
+        cards = crawl_all_series(
+            base_url=args.base_url,
+            timeout_seconds=args.timeout,
+            fetcher=partial(
+                fetch_html,
+                max_attempts=args.request_retry_attempts,
+                retry_delay_seconds=args.request_retry_delay,
+                retry_jitter_ratio=args.request_retry_jitter,
+            ),
+        )
     else:
         source_url = args.url or build_cardlist_url(base_url=args.base_url, series=args.series)
-        html, final_url = fetch_html(source_url, timeout_seconds=args.timeout)
+        html, final_url = fetch_html(
+            source_url,
+            timeout_seconds=args.timeout,
+            max_attempts=args.request_retry_attempts,
+            retry_delay_seconds=args.request_retry_delay,
+            retry_jitter_ratio=args.request_retry_jitter,
+        )
         cards = parse_card_list(html, source_url=final_url)
 
     if not cards:
         print("No cards found", file=sys.stderr)
-        return 2
+        raise SystemExit(2)
 
     if args.upload_images:
         from .storage import ObjectStorageConfig, S3ObjectStorage, fetch_image, upload_card_images
@@ -330,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"Uploaded {image_stats.uploaded} images to {args.storage_bucket}; "
-            f"skipped {image_stats.skipped}",
+            f"skipped {image_stats.skipped}; failed {image_stats.failed}",
             file=sys.stderr,
         )
 
@@ -342,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             write_csv(cards, output_path)
         print(f"Wrote {len(cards)} cards to {output_path}", file=sys.stderr)
         if not args.load_db:
-            return 0
+            return RunStats(cards=len(cards))
 
     if args.load_db:
         from .database import connect_database, load_cards_to_database
@@ -358,13 +428,13 @@ def main(argv: list[str] | None = None) -> int:
             f"Loaded {stats.cards} cards and {stats.printings} printings into database",
             file=sys.stderr,
         )
-        return 0
+        return RunStats(cards=stats.cards, printings=stats.printings)
 
     if args.format == "jsonl":
         write_jsonl_stream(cards, sys.stdout)
     else:
         write_csv_stream(cards, sys.stdout)
-    return 0
+    return RunStats(cards=len(cards))
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -388,6 +458,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--all-series",
         action="store_true",
         help="Discover every official Recording option and crawl each series page.",
+    )
+    parser.add_argument(
+        "--all-languages",
+        action="store_true",
+        help="Crawl every official series for jp, en, and ko in one batch run.",
+    )
+    parser.add_argument(
+        "--languages",
+        default=",".join(DEFAULT_LANGUAGE_CODES),
+        help="Comma-separated language codes for --all-languages. Default: jp,en,ko.",
     )
     parser.add_argument(
         "--format",
@@ -462,6 +542,30 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Initial image retry delay in seconds; retries use exponential backoff. Default: 2.0.",
     )
     parser.add_argument(
+        "--request-retry-attempts",
+        type=int,
+        default=int(os.environ.get("TCG_SEARCH_REQUEST_RETRY_ATTEMPTS", "6")),
+        help="Card list HTML retry attempts for transient upstream failures. Default: 6.",
+    )
+    parser.add_argument(
+        "--request-retry-delay",
+        type=float,
+        default=float(os.environ.get("TCG_SEARCH_REQUEST_RETRY_DELAY_SECONDS", "2.0")),
+        help="Initial card list retry delay in seconds; retries use exponential backoff. Default: 2.0.",
+    )
+    parser.add_argument(
+        "--request-retry-jitter",
+        type=float,
+        default=float(os.environ.get("TCG_SEARCH_REQUEST_RETRY_JITTER_RATIO", "0.25")),
+        help="Retry jitter ratio for card list HTML requests. Default: 0.25.",
+    )
+    parser.add_argument(
+        "--language-cooldown-seconds",
+        type=float,
+        default=float(os.environ.get("TCG_SEARCH_LANGUAGE_COOLDOWN_SECONDS", "5.0")),
+        help="Sleep between language batches to reduce upstream request bursts. Default: 5.",
+    )
+    parser.add_argument(
         "--database-url",
         default=os.environ.get(
             "TCG_SEARCH_DATABASE_URL",
@@ -487,7 +591,40 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.all_series and (args.url or args.series or args.input_jsonl):
         parser.error("--all-series cannot be used with --url, --series, or --input-jsonl")
+    if args.all_languages and (args.url or args.series or args.input_jsonl or args.output):
+        parser.error("--all-languages cannot be used with --url, --series, --input-jsonl, or --output")
+    if args.all_languages:
+        args.all_series = True
+        try:
+            _language_codes(args.languages)
+        except ValueError as exc:
+            parser.error(str(exc))
     return args
+
+
+def _cardlist_root_url(base_url: str) -> str:
+    trimmed = base_url.rstrip("/")
+    if trimmed.endswith("/cardlist") or trimmed.endswith("/cardlist.do"):
+        return trimmed
+    return f"{trimmed}{CARDLIST_PATH}"
+
+
+def _retry_delay(base_delay_seconds: float, attempt: int, jitter_ratio: float) -> float:
+    delay = base_delay_seconds * (2 ** (attempt - 1))
+    if jitter_ratio <= 0:
+        return delay
+    jitter = delay * jitter_ratio
+    return delay + random.uniform(0, jitter)
+
+
+def _language_codes(value: str) -> tuple[str, ...]:
+    codes = tuple(code.strip() for code in value.split(",") if code.strip())
+    invalid_codes = [code for code in codes if code not in LANGUAGE_BASE_URLS]
+    if invalid_codes:
+        raise ValueError(f"Unsupported language codes: {', '.join(invalid_codes)}")
+    if not codes:
+        raise ValueError("At least one language code is required")
+    return codes
 
 
 def _ssl_context() -> ssl.SSLContext:

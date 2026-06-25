@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import hmac
 import mimetypes
+import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
@@ -37,6 +38,7 @@ class ImageUploadStats:
     total: int = 0
     uploaded: int = 0
     skipped: int = 0
+    failed: int = 0
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,26 @@ class S3ObjectStorage:
         request = Request(url, data=body, headers=headers, method="PUT")
         with self._opener(request, timeout=self._config.timeout_seconds) as response:
             response.read()
+
+    def object_exists(self, key: str) -> bool:
+        url = self._object_url(self._config.endpoint_url, key)
+        now = self._clock()
+        headers = self._signed_headers(
+            method="HEAD",
+            url=url,
+            body=b"",
+            content_type="application/octet-stream",
+            now=now,
+        )
+        request = Request(url, headers=headers, method="HEAD")
+        try:
+            with self._opener(request, timeout=self._config.timeout_seconds) as response:
+                response.read()
+            return True
+        except HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
 
     def public_url(self, key: str) -> str:
         return self._object_url(self._config.public_base_url or self._config.endpoint_url, key)
@@ -190,25 +212,51 @@ def upload_card_images(
 ) -> ImageUploadStats:
     uploaded = 0
     skipped = 0
+    failed = 0
     for card in cards:
         if not card.image_url:
             skipped += 1
             continue
 
         source_image_url = card.image_url
-        image = image_fetcher(source_image_url, timeout_seconds)
         key = _object_key_for_card(card, source_image_url=source_image_url, key_prefix=key_prefix)
+        if _object_exists(storage, key):
+            card.image_url = storage.public_url(key)
+            skipped += 1
+            continue
+
+        try:
+            image = image_fetcher(source_image_url, timeout_seconds)
+        except ImageDownloadError as exc:
+            failed += 1
+            print(
+                f"Failed to upload image for {card.printing_id}; keeping source URL for retry on next run: {exc}",
+                file=sys.stderr,
+            )
+            continue
         storage.put_object(key, image.body, image.content_type)
         card.image_url = storage.public_url(key)
         uploaded += 1
 
-    return ImageUploadStats(total=uploaded + skipped, uploaded=uploaded, skipped=skipped)
+    return ImageUploadStats(
+        total=uploaded + skipped + failed,
+        uploaded=uploaded,
+        skipped=skipped,
+        failed=failed,
+    )
 
 
 def _object_key_for_card(card: OnePieceCardPrinting, source_image_url: str, key_prefix: str) -> str:
     prefix = key_prefix.strip("/")
     suffix = _image_suffix(source_image_url)
     return f"{prefix}/{card.printing_id}{suffix}"
+
+
+def _object_exists(storage, key: str) -> bool:
+    object_exists = getattr(storage, "object_exists", None)
+    if object_exists is None:
+        return False
+    return bool(object_exists(key))
 
 
 def _image_suffix(url: str) -> str:

@@ -18,6 +18,10 @@ from tests.test_scraper import SAMPLE_HTML, SOURCE_URL
 class FakeStorage:
     def __init__(self):
         self.uploads = []
+        self.existing_keys = set()
+
+    def object_exists(self, key: str) -> bool:
+        return key in self.existing_keys
 
     def put_object(self, key: str, body: bytes, content_type: str) -> None:
         self.uploads.append((key, body, content_type))
@@ -150,6 +154,86 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(
             storage.uploads[0][0],
             "onepiece/jp/cards/OP16-001_p1.png",
+        )
+
+    def test_upload_card_images_skips_existing_bucket_object_and_rewrites_card_url(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        storage = FakeStorage()
+        storage.existing_keys.add("onepiece/jp/cards/OP16-001_p1.png")
+        fetched_urls = []
+
+        def fake_fetcher(url, timeout_seconds):
+            fetched_urls.append(url)
+            return DownloadedImage(body=b"image-bytes", content_type="image/png")
+
+        stats = upload_card_images(
+            [card],
+            storage=storage,
+            image_fetcher=fake_fetcher,
+            key_prefix="onepiece/jp/cards",
+        )
+
+        self.assertEqual(stats.total, 1)
+        self.assertEqual(stats.uploaded, 0)
+        self.assertEqual(stats.skipped, 1)
+        self.assertEqual(fetched_urls, [])
+        self.assertEqual(storage.uploads, [])
+        self.assertEqual(
+            card.image_url,
+            "http://localhost:9000/tcg-search-local/onepiece/jp/cards/OP16-001_p1.png",
+        )
+
+    def test_upload_card_images_uploads_when_db_row_exists_but_bucket_object_is_missing(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        storage = FakeStorage()
+
+        def fake_fetcher(url, timeout_seconds):
+            return DownloadedImage(body=b"image-bytes", content_type="image/png")
+
+        stats = upload_card_images(
+            [card],
+            storage=storage,
+            image_fetcher=fake_fetcher,
+            key_prefix="onepiece/jp/cards",
+        )
+
+        self.assertEqual(stats.total, 1)
+        self.assertEqual(stats.uploaded, 1)
+        self.assertEqual(stats.skipped, 0)
+        self.assertEqual(
+            storage.uploads,
+            [("onepiece/jp/cards/OP16-001_p1.png", b"image-bytes", "image/png")],
+        )
+
+    def test_upload_card_images_continues_after_retry_exhausted_for_one_card(self):
+        cards = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)
+        storage = FakeStorage()
+        original_first_image_url = cards[0].image_url
+
+        def fake_fetcher(url, timeout_seconds):
+            if "OP16-001_p1" in url:
+                raise ImageDownloadError(f"Failed to download image {url} after 6 attempts")
+            return DownloadedImage(body=b"image-bytes", content_type="image/png")
+
+        stats = upload_card_images(
+            cards,
+            storage=storage,
+            image_fetcher=fake_fetcher,
+            key_prefix="onepiece/jp/cards",
+        )
+
+        self.assertEqual(stats.total, 2)
+        self.assertEqual(stats.uploaded, 1)
+        self.assertEqual(stats.skipped, 0)
+        self.assertEqual(stats.failed, 1)
+        self.assertEqual(cards[0].image_url, original_first_image_url)
+        self.assertEqual(
+            storage.uploads,
+            [("onepiece/jp/cards/EB04-054_p1.png", b"image-bytes", "image/png")],
+        )
+        self.assertEqual(
+            cards[1].image_url,
+            "http://localhost:9000/tcg-search-local/onepiece/jp/cards/EB04-054_p1.png",
         )
 
     def test_upload_card_images_skips_cards_without_image_url(self):
