@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.error import HTTPError
+from io import BytesIO
 
 from onepiece_card_scraper.scraper import (
     DEFAULT_BASE_URL,
@@ -15,6 +17,7 @@ from onepiece_card_scraper.scraper import (
     build_cardlist_url,
     crawl_all_series,
     discover_series_options,
+    fetch_html,
     main,
     parse_card_list,
     read_jsonl,
@@ -175,6 +178,26 @@ NO_SET_CARD_HTML = """
 """
 
 
+class FakeHtmlResponse:
+    def __init__(self, body: bytes, final_url: str, charset: str = "utf-8") -> None:
+        self._body = body
+        self._final_url = final_url
+        self.headers = mock.Mock()
+        self.headers.get_content_charset.return_value = charset
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return self._body
+
+    def geturl(self):
+        return self._final_url
+
+
 class OnePieceCardScraperTests(unittest.TestCase):
     def test_discover_series_options_skips_placeholder_and_all(self):
         series_options = discover_series_options(SERIES_INDEX_HTML)
@@ -211,6 +234,44 @@ class OnePieceCardScraperTests(unittest.TestCase):
                 build_cardlist_url(base_url=DEFAULT_BASE_URL, series="569102"),
                 build_cardlist_url(base_url=DEFAULT_BASE_URL, series="569026"),
             ],
+        )
+
+    def test_fetch_html_retries_transient_http_errors(self):
+        calls = []
+        sleeps = []
+
+        def fake_opener(request, timeout, context):
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                raise HTTPError(
+                    request.full_url,
+                    502,
+                    "Bad Gateway",
+                    hdrs=None,
+                    fp=BytesIO(b"bad gateway"),
+                )
+            return FakeHtmlResponse(b"<html>ok</html>", "https://example.com/cardlist/")
+
+        html, final_url = fetch_html(
+            "https://example.com/cardlist/",
+            opener=fake_opener,
+            sleep=sleeps.append,
+            retry_jitter_ratio=0.0,
+        )
+
+        self.assertEqual(html, "<html>ok</html>")
+        self.assertEqual(final_url, "https://example.com/cardlist/")
+        self.assertEqual(calls, ["https://example.com/cardlist/", "https://example.com/cardlist/"])
+        self.assertEqual(sleeps, [2.0])
+
+    def test_build_cardlist_url_accepts_exact_cardlist_do_base_url(self):
+        self.assertEqual(
+            build_cardlist_url("https://onepiece-cardgame.kr/cardlist.do"),
+            "https://onepiece-cardgame.kr/cardlist.do",
+        )
+        self.assertEqual(
+            build_cardlist_url("https://onepiece-cardgame.kr/cardlist.do", series="569101"),
+            "https://onepiece-cardgame.kr/cardlist.do?series=569101",
         )
 
     def test_parse_card_list_normalizes_modal_cards(self):
@@ -303,11 +364,11 @@ class OnePieceCardScraperTests(unittest.TestCase):
             write_jsonl(cards, input_path)
 
             def fake_upload(cards, storage, image_fetcher, key_prefix, timeout_seconds):
-                self.assertEqual(key_prefix, "cards")
+                self.assertEqual(key_prefix, "onepiece/jp/cards")
                 self.assertEqual(timeout_seconds, 4.0)
                 self.assertEqual(image_fetcher.keywords["max_attempts"], 9)
                 self.assertEqual(image_fetcher.keywords["retry_delay_seconds"], 3.0)
-                cards[0].image_url = "http://localhost:9000/tcg-search-local/cards/OP16-001_p1.png"
+                cards[0].image_url = "http://localhost:9000/tcg-search-local/onepiece/jp/cards/OP16-001_p1.png"
                 return ImageUploadStats(total=2, uploaded=1, skipped=1)
 
             with mock.patch("onepiece_card_scraper.storage.upload_card_images", side_effect=fake_upload):
@@ -316,8 +377,10 @@ class OnePieceCardScraperTests(unittest.TestCase):
                         "--input-jsonl",
                         str(input_path),
                         "--upload-images",
+                        "--language-code",
+                        "jp",
                         "--image-key-prefix",
-                        "cards",
+                        "onepiece/{language_code}/cards",
                         "--timeout",
                         "4",
                         "--image-retry-attempts",
@@ -337,7 +400,79 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(
             records[0]["image_url"],
-            "http://localhost:9000/tcg-search-local/cards/OP16-001_p1.png",
+            "http://localhost:9000/tcg-search-local/onepiece/jp/cards/OP16-001_p1.png",
+        )
+
+    def test_main_all_languages_runs_each_config_with_language_scoped_images_and_db_load(self):
+        crawl_calls = []
+        upload_prefixes = []
+        db_loads = []
+        cards_by_language = {
+            "jp": parse_card_list(SINGLE_CARD_HTML, source_url="https://onepiece-cardgame.com/cardlist/"),
+            "en": parse_card_list(SINGLE_CARD_HTML, source_url="https://en.onepiece-cardgame.com/cardlist/"),
+            "ko": parse_card_list(SINGLE_CARD_HTML, source_url="https://onepiece-cardgame.kr/cardlist.do"),
+        }
+
+        def fake_crawl_all_series(base_url, timeout_seconds, fetcher):
+            language_code = {
+                "https://onepiece-cardgame.com": "jp",
+                "https://en.onepiece-cardgame.com": "en",
+                "https://onepiece-cardgame.kr/cardlist.do": "ko",
+            }[base_url]
+            crawl_calls.append((language_code, base_url, timeout_seconds))
+            return cards_by_language[language_code]
+
+        def fake_upload(cards, storage, image_fetcher, key_prefix, timeout_seconds):
+            upload_prefixes.append(key_prefix)
+            cards[0].image_url = f"http://localhost:9000/tcg-search-local/{key_prefix}/{cards[0].printing_id}.png"
+            return ImageUploadStats(total=1, uploaded=1, skipped=0)
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        def fake_load(connection, cards, language_code, region_code):
+            db_loads.append((language_code, region_code, cards[0].image_url))
+            return mock.Mock(cards=1, printings=1)
+
+        with (
+            mock.patch("onepiece_card_scraper.scraper.crawl_all_series", side_effect=fake_crawl_all_series),
+            mock.patch("onepiece_card_scraper.storage.upload_card_images", side_effect=fake_upload),
+            mock.patch("onepiece_card_scraper.database.connect_database", return_value=FakeConnection()),
+            mock.patch("onepiece_card_scraper.database.load_cards_to_database", side_effect=fake_load),
+        ):
+            exit_code = main(
+                [
+                    "--all-languages",
+                    "--upload-images",
+                    "--load-db",
+                    "--timeout",
+                    "4",
+                    "--language-cooldown-seconds",
+                    "0",
+                ],
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            crawl_calls,
+            [
+                ("jp", "https://onepiece-cardgame.com", 4.0),
+                ("en", "https://en.onepiece-cardgame.com", 4.0),
+                ("ko", "https://onepiece-cardgame.kr/cardlist.do", 4.0),
+            ],
+        )
+        self.assertEqual(upload_prefixes, ["onepiece/jp/cards", "onepiece/en/cards", "onepiece/ko/cards"])
+        self.assertEqual(
+            db_loads,
+            [
+                ("jp", None, "http://localhost:9000/tcg-search-local/onepiece/jp/cards/OP02-001.png"),
+                ("en", None, "http://localhost:9000/tcg-search-local/onepiece/en/cards/OP02-001.png"),
+                ("ko", None, "http://localhost:9000/tcg-search-local/onepiece/ko/cards/OP02-001.png"),
+            ],
         )
 
     def test_resolve_ca_file_prefers_environment_path(self):
