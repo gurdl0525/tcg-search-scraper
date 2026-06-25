@@ -57,6 +57,7 @@ def load_cards_to_database(
         card_count += 1
         attribute_id = _upsert_attribute(connection, card.attribute)
         identity_id = _upsert_card_identity(connection, card, attribute_id)
+        _upsert_card_identity_translation(connection, identity_id, card, language_code)
         _replace_colors(connection, identity_id, card.colors)
         _replace_traits(connection, identity_id, card.traits)
 
@@ -64,6 +65,7 @@ def load_cards_to_database(
         card_sets = _card_sets_for(card)
         for card_set_code, card_set_name in card_sets:
             card_set_id = _upsert_card_set(connection, card_set_code, card_set_name)
+            _upsert_card_set_translation(connection, card_set_id, language_code, card_set_name)
             _upsert_card_printing(
                 connection=connection,
                 card=card,
@@ -145,12 +147,11 @@ def _upsert_card_set(connection, code: str, name: str):
         values (%s, %s, %s)
         on conflict (code) do update
         set
-            name = excluded.name,
             product_type = excluded.product_type,
             updated_at = now()
         returning id
         """,
-        (code, name, _product_type_for_set_code(code)),
+        (code, code, _product_type_for_set_code(code)),
     )
 
 
@@ -174,32 +175,78 @@ def _upsert_card_identity(connection, card: OnePieceCardPrinting, attribute_id):
         values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (card_no) do update
         set
-            name = excluded.name,
             card_type = excluded.card_type,
             cost = excluded.cost,
             life = excluded.life,
             power = excluded.power,
             counter = excluded.counter,
             attribute_id = excluded.attribute_id,
-            effect_text = excluded.effect_text,
-            trigger_text = excluded.trigger_text,
             block_no = excluded.block_no,
             updated_at = now()
         returning id
         """,
         (
             card.card_no,
-            card.name,
+            card.card_no,
             card.card_type,
             card.cost,
             card.life,
             card.power,
             card.counter,
             attribute_id,
-            card.effect_text,
-            card.trigger_text,
+            None,
+            None,
             _block_no(card.block_icon),
         ),
+    )
+
+
+def _upsert_card_identity_translation(
+    connection,
+    identity_id,
+    card: OnePieceCardPrinting,
+    language_code: str,
+) -> None:
+    _execute(
+        connection,
+        """
+        insert into card_identity_translations (
+            card_identity_id,
+            language_code,
+            name,
+            effect_text,
+            trigger_text
+        )
+        values (%s, %s, %s, %s, %s)
+        on conflict (card_identity_id, language_code) do update
+        set
+            name = excluded.name,
+            effect_text = excluded.effect_text,
+            trigger_text = excluded.trigger_text,
+            updated_at = now()
+        """,
+        (
+            identity_id,
+            language_code,
+            card.name,
+            card.effect_text,
+            card.trigger_text,
+        ),
+    )
+
+
+def _upsert_card_set_translation(connection, card_set_id, language_code: str, name: str) -> None:
+    _execute(
+        connection,
+        """
+        insert into card_set_translations (card_set_id, language_code, name)
+        values (%s, %s, %s)
+        on conflict (card_set_id, language_code) do update
+        set
+            name = excluded.name,
+            updated_at = now()
+        """,
+        (card_set_id, language_code, name),
     )
 
 

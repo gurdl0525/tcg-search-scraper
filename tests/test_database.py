@@ -63,6 +63,44 @@ class DatabaseLoaderTests(unittest.TestCase):
         ]
         self.assertEqual(identity_params[0][10], None)
 
+    def test_load_cards_to_database_writes_language_translation_without_overwriting_identity(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        connection = RecordingConnection()
+
+        stats = load_cards_to_database(connection, [card], language_code="en")
+
+        self.assertEqual(stats.cards, 1)
+        self.assertTrue(
+            any(
+                "insert into card_identity_translations" in sql.lower()
+                and params[1] == "en"
+                and params[2] == "Portgas.D.Ace"
+                for sql, params in connection.statements
+            ),
+        )
+        identity_params = [
+            params
+            for sql, params in connection.statements
+            if "insert into card_identities" in sql.lower()
+        ]
+        self.assertEqual(identity_params[0][0], "OP16-001")
+        self.assertNotIn("Portgas.D.Ace", identity_params[0])
+
+    def test_load_cards_to_database_writes_card_set_translation(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        connection = RecordingConnection()
+
+        load_cards_to_database(connection, [card], language_code="en")
+
+        self.assertTrue(
+            any(
+                "insert into card_set_translations" in sql.lower()
+                and params[1] == "en"
+                and params[2] == "-THE TIME OF BATTLE- [OP-16]"
+                for sql, params in connection.statements
+            ),
+        )
+
     def test_card_sets_for_uses_name_when_official_set_has_no_code(self):
         card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
         card.card_sets = ["Offline Regional Participation Pack 2025 Vol.2"]
