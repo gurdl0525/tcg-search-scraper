@@ -101,6 +101,30 @@ class DatabaseLoaderTests(unittest.TestCase):
             ),
         )
 
+    def test_load_cards_to_database_replaces_translation_search_tokens(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        card.name = "몽키 D. 루피"
+        card.effect_text = "한국어 효과"
+        connection = RecordingConnection()
+
+        load_cards_to_database(connection, [card], language_code="ko")
+
+        delete_statements = [
+            params
+            for sql, params in connection.statements
+            if "delete from card_identity_translation_search_tokens" in sql.lower()
+        ]
+        token_params = [
+            params
+            for sql, params in connection.statements
+            if "insert into card_identity_translation_search_tokens" in sql.lower()
+        ]
+
+        self.assertEqual(delete_statements, [("id-3",)])
+        self.assertTrue(any(params[2] == "ko" and params[4] == "choseong_prefix" and params[5] == "ㄹ" for params in token_params))
+        self.assertTrue(any(params[3] == "name" and params[4] == "word" and params[5] == "루피" for params in token_params))
+        self.assertTrue(any(params[3] == "effect_text" and params[4] == "word" and params[5] == "효과" for params in token_params))
+
     def test_card_sets_for_uses_name_when_official_set_has_no_code(self):
         card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
         card.card_sets = ["Offline Regional Participation Pack 2025 Vol.2"]

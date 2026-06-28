@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .scraper import OnePieceCardPrinting
+from .search_tokens import search_tokens_for_fields
 
 
 DEFAULT_DATABASE_URL = "postgresql://tcg_search:tcg_search@localhost:5432/tcg_search"
@@ -57,7 +58,14 @@ def load_cards_to_database(
         card_count += 1
         attribute_id = _upsert_attribute(connection, card.attribute)
         identity_id = _upsert_card_identity(connection, card, attribute_id)
-        _upsert_card_identity_translation(connection, identity_id, card, language_code)
+        translation_id = _upsert_card_identity_translation(connection, identity_id, card, language_code)
+        _replace_card_identity_translation_search_tokens(
+            connection=connection,
+            translation_id=translation_id,
+            identity_id=identity_id,
+            language_code=language_code,
+            card=card,
+        )
         _replace_colors(connection, identity_id, card.colors)
         _replace_traits(connection, identity_id, card.traits)
 
@@ -206,8 +214,8 @@ def _upsert_card_identity_translation(
     identity_id,
     card: OnePieceCardPrinting,
     language_code: str,
-) -> None:
-    _execute(
+):
+    return _fetch_id(
         connection,
         """
         insert into card_identity_translations (
@@ -224,6 +232,7 @@ def _upsert_card_identity_translation(
             effect_text = excluded.effect_text,
             trigger_text = excluded.trigger_text,
             updated_at = now()
+        returning id
         """,
         (
             identity_id,
@@ -233,6 +242,50 @@ def _upsert_card_identity_translation(
             card.trigger_text,
         ),
     )
+
+
+def _replace_card_identity_translation_search_tokens(
+    connection,
+    translation_id,
+    identity_id,
+    language_code: str,
+    card: OnePieceCardPrinting,
+) -> None:
+    _execute(
+        connection,
+        "delete from card_identity_translation_search_tokens where card_identity_translation_id = %s",
+        (translation_id,),
+    )
+    for token in search_tokens_for_fields(
+        name=card.name,
+        effect_text=card.effect_text,
+        trigger_text=card.trigger_text,
+    ):
+        _execute(
+            connection,
+            """
+            insert into card_identity_translation_search_tokens (
+                card_identity_translation_id,
+                card_identity_id,
+                language_code,
+                source_field,
+                token_type,
+                token,
+                weight
+            )
+            values (%s, %s, %s, %s, %s, %s, %s)
+            on conflict do nothing
+            """,
+            (
+                translation_id,
+                identity_id,
+                language_code,
+                token.source_field,
+                token.token_type,
+                token.token,
+                token.weight,
+            ),
+        )
 
 
 def _upsert_card_set_translation(connection, card_set_id, language_code: str, name: str) -> None:
