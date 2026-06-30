@@ -57,7 +57,13 @@ VOID_TAGS = {
     "wbr",
 }
 CARD_SET_CODE_PATTERN = re.compile(r"\[([A-Z0-9-]+)\]")
-PARALLEL_ID_PATTERN = re.compile(r"_p\d+$")
+PARALLEL_ID_PATTERN = re.compile(r"_p\d+$", re.IGNORECASE)
+KOREAN_CARD_TYPE_NAMES = {
+    "리더": "LEADER",
+    "캐릭터": "CHARACTER",
+    "스테이지": "STAGE",
+    "이벤트": "EVENT",
+}
 CSV_FIELDS = [
     "printing_id",
     "card_no",
@@ -244,6 +250,8 @@ def discover_series_options(html: str, include_all: bool = False) -> list[Series
             series_select = select
             break
     if not series_select:
+        series_select = _find_korean_series_select(builder.root)
+    if not series_select:
         return []
 
     series_options = []
@@ -251,7 +259,9 @@ def discover_series_options(html: str, include_all: bool = False) -> list[Series
         code = option.attrs.get("value", "").strip()
         if not code:
             continue
-        if code == "ALL" and not include_all:
+        if code.upper() == "ALL" and not include_all:
+            continue
+        if code.lower() == "all" and not include_all:
             continue
         series_options.append(SeriesOption(code=code, name=_clean_option_label(option.text_content())))
     return series_options
@@ -274,9 +284,31 @@ def crawl_all_series(
             file=sys.stderr,
         )
         html, final_url = fetcher(series_url, timeout_seconds)
-        for card in parse_card_list(html, source_url=final_url):
-            _apply_series_fallback(card, series_option)
-            cards_by_key.setdefault(_card_record_key(card), card)
+        seen_page_urls = {series_url, final_url}
+        pending_pages = [(html, final_url)]
+        for page_url in _discover_pagination_urls(html, final_url):
+            if page_url in seen_page_urls:
+                continue
+            seen_page_urls.add(page_url)
+            pending_pages.append((page_url, ""))
+
+        while pending_pages:
+            page_content, page_source_url = pending_pages.pop(0)
+            if page_source_url:
+                page_html = page_content
+                page_final_url = page_source_url
+            else:
+                page_html, page_final_url = fetcher(page_content, timeout_seconds)
+                seen_page_urls.add(page_final_url)
+
+            for card in parse_card_list(page_html, source_url=page_final_url):
+                _apply_series_fallback(card, series_option)
+                cards_by_key.setdefault(_card_record_key(card), card)
+            for next_page_url in _discover_pagination_urls(page_html, page_final_url):
+                if next_page_url in seen_page_urls:
+                    continue
+                seen_page_urls.add(next_page_url)
+                pending_pages.append((next_page_url, ""))
 
     return list(cards_by_key.values())
 
@@ -288,6 +320,11 @@ def parse_card_list(html: str, source_url: str) -> list[OnePieceCardPrinting]:
     cards = []
     for modal in builder.root.find_all(tag="dl", class_name="modalCol"):
         cards.append(_parse_modal_card(modal, source_url=source_url))
+    if cards:
+        return cards
+    for item in builder.root.find_all(tag="button", class_name="item"):
+        if item.find_first(class_name="cardNumber"):
+            cards.append(_parse_korean_card_item(item, source_url=source_url))
     return cards
 
 
@@ -695,6 +732,77 @@ def _parse_modal_card(modal: Node, source_url: str) -> OnePieceCardPrinting:
     )
 
 
+def _parse_korean_card_item(item: Node, source_url: str) -> OnePieceCardPrinting:
+    printing_id = _korean_field(item, "cardNumber")
+    card_type = _normalize_korean_card_type(_korean_field(item, "cardType"))
+    cost_or_life = _parse_int(_korean_field(item, "life"))
+    cost = None if card_type == "LEADER" else cost_or_life
+    life = cost_or_life if card_type == "LEADER" else None
+    card_set = _korean_field(item, "cardGet")
+    image_node = item.find_first(tag="img", class_name="image") or item.find_first(tag="img")
+
+    return OnePieceCardPrinting(
+        printing_id=printing_id,
+        card_no=PARALLEL_ID_PATTERN.sub("", printing_id),
+        name=_korean_field(item, "cardName"),
+        rarity_code=_normalize_rarity(_korean_field(item, "rarity")),
+        card_type=card_type,
+        cost=cost,
+        life=life,
+        attribute=_normalize_missing(_korean_field(item, "cardAttr")),
+        power=_parse_int(_korean_field(item, "power")),
+        counter=_parse_int(_korean_field(item, "cardCounter")),
+        colors=_split_multi_value(_korean_field(item, "cardColor")),
+        block_icon=_normalize_missing(_korean_field(item, "blockNumber")),
+        traits=_split_multi_value(_korean_field(item, "cardPoint")),
+        effect_text=_normalize_missing(_korean_field(item, "cardText")),
+        trigger_text=_normalize_missing(_korean_field(item, "cardTrigger")),
+        card_sets=_split_card_sets(card_set),
+        card_set_codes=_extract_card_set_codes(card_set),
+        image_url=_image_url(image_node, source_url),
+        source_url=source_url,
+        is_parallel=bool(PARALLEL_ID_PATTERN.search(printing_id)),
+    )
+
+
+def _find_korean_series_select(root: Node) -> Node | None:
+    for select in root.find_all(tag="select"):
+        option_values = [
+            option.attrs.get("value", "").strip()
+            for option in select.find_all(tag="option")
+        ]
+        if any(value.startswith("[") or value.startswith("【") for value in option_values):
+            return select
+    return None
+
+
+def _discover_pagination_urls(html: str, source_url: str) -> list[str]:
+    builder = TreeBuilder()
+    builder.feed(html)
+
+    urls = []
+    for pagination in builder.root.find_all(class_name="pagination"):
+        for link in pagination.find_all(tag="a"):
+            if link.has_class("active"):
+                continue
+            href = link.attrs.get("href", "").strip()
+            if href:
+                urls.append(urljoin(source_url, href))
+    return urls
+
+
+def _korean_field(item: Node, class_name: str) -> str:
+    node = item.find_first(class_name=class_name)
+    if not node:
+        return ""
+    return normalize_text(_collect_direct_text(node))
+
+
+def _normalize_korean_card_type(value: str) -> str:
+    normalized = normalize_text(value)
+    return KOREAN_CARD_TYPE_NAMES.get(normalized, normalized.upper())
+
+
 def _field_label(node: Node | None) -> str:
     if not node:
         return ""
@@ -735,6 +843,10 @@ def _collect_text(node: Node) -> str:
     return "".join(parts)
 
 
+def _collect_direct_text(node: Node) -> str:
+    return "".join(child for child in node.children if isinstance(child, str))
+
+
 def normalize_text(value: str) -> str:
     value = value.replace("\xa0", " ")
     value = re.sub(r"[ \t\r\f\v]+", " ", value)
@@ -763,6 +875,8 @@ def _parse_int(value: str) -> int | None:
     value = normalize_text(value).replace(",", "")
     if not value or value == "-":
         return None
+    if value.startswith("+"):
+        value = value[1:]
     if not value.isdigit():
         return None
     return int(value)
@@ -775,10 +889,19 @@ def _split_slash(value: str) -> list[str]:
     return [part.strip() for part in value.split("/") if part.strip()]
 
 
+def _split_multi_value(value: str) -> list[str]:
+    value = normalize_text(value)
+    if not value or value == "-":
+        return []
+    return [part.strip() for part in re.split(r"[/,]", value) if part.strip()]
+
+
 def _split_card_sets(value: str) -> list[str]:
     value = normalize_text(value)
     if not value or value == "-":
         return []
+    if value.startswith("["):
+        return [value]
 
     matches = re.findall(r"[^;\n]*?\[[^\]]+\]", value)
     if matches:

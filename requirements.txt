@@ -1,0 +1,4 @@
+packaging==26.2
+psycopg==3.3.4
+psycopg-binary==3.3.4
+typing_extensions==4.15.0

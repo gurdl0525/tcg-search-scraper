@@ -178,6 +178,117 @@ NO_SET_CARD_HTML = """
 """
 
 
+KOREAN_SERIES_INDEX_HTML = """
+<div class="sub_p_search_box">
+  <select>
+    <option value="all">전체</option>
+    <option value="[OPK-13] 부스터 팩 계승되는 의지" selected="selected">[OPK-13] 부스터 팩 계승되는 의지</option>
+    <option value="[STK-01] 스타트 덱 밀짚모자 일당">[STK-01] 스타트 덱 밀짚모자 일당</option>
+    <option value="【프로모션】">프로모션</option>
+  </select>
+</div>
+"""
+
+
+KOREAN_CARD_LIST_HTML = """
+<div class="card_sch_list">
+  <button class="item">
+    <img class="image" src="/fileDownload?downname=op13-001" alt="image">
+    <p class="cardGet">[OPK-13] 부스터 팩 계승되는 의지
+    <p class="cardType">리더
+    <p class="cardColor">적색,녹색
+    <p class="life">4
+    <p class="cardPoint">초신성/밀짚모자 일당
+    <p class="cardCounter">-
+    <p class="animationType">오리지널
+    <p class="cardTrigger">
+    <p class="cardAttr">타격
+    <p class="power">5000
+    <p class="cardNumber">OP13-001
+    <p class="rarity">L
+    <p class="cardText">【두웅!!×1】효과 텍스트
+    <p class="blockNumber">4
+    <p class="cardName">몽키 D. 루피
+  </button>
+  <button class="item">
+    <img class="image" src="/fileDownload?downname=op13-001-p1" alt="image">
+    <p class="cardGet">[OPK-13] 부스터 팩 계승되는 의지
+    <p class="cardType">캐릭터
+    <p class="cardColor">적색
+    <p class="life">1
+    <p class="cardPoint">후샤 마을
+    <p class="cardCounter">+2000
+    <p class="animationType">원작
+    <p class="cardTrigger">【트리거】파워 +3000.
+    <p class="cardAttr">지혜
+    <p class="power">0
+    <p class="cardNumber">OP13-001_P1
+    <p class="rarity">C
+    <p class="cardText">등장 시 효과
+    <p class="blockNumber">4
+    <p class="cardName">마키노
+  </button>
+</div>
+<div class="pagination">
+  <a href="/cardlist.do?page=0&amp;size=20&amp;series=%5BOPK-13%5D" class="num active">1</a>
+  <a href="/cardlist.do?page=1&amp;size=20&amp;series=%5BOPK-13%5D" class="num">2</a>
+  <a href="/cardlist.do?page=1&amp;size=20&amp;series=%5BOPK-13%5D" class="pagi_next">Next</a>
+</div>
+"""
+
+
+KOREAN_CARD_PAGE_2_HTML = """
+<div class="card_sch_list">
+  <button class="item">
+    <img class="image" src="/fileDownload?downname=op13-002" alt="image">
+    <p class="cardGet">[OPK-13] 부스터 팩 계승되는 의지
+    <p class="cardType">이벤트
+    <p class="cardColor">청색
+    <p class="life">2
+    <p class="cardPoint">밀짚모자 일당
+    <p class="cardCounter">-
+    <p class="animationType">원작
+    <p class="cardTrigger">【트리거】카드를 1장 뽑는다.
+    <p class="cardAttr">-
+    <p class="power">-
+    <p class="cardNumber">OP13-002
+    <p class="rarity">R
+    <p class="cardText">메인 효과
+    <p class="blockNumber">4
+    <p class="cardName">고무고무
+  </button>
+</div>
+<div class="pagination">
+  <a href="/cardlist.do?page=1&amp;size=20&amp;series=%5BOPK-13%5D" class="num active">2</a>
+  <a href="/cardlist.do?page=2&amp;size=20&amp;series=%5BOPK-13%5D" class="num">3</a>
+</div>
+"""
+
+
+KOREAN_CARD_PAGE_3_HTML = """
+<div class="card_sch_list">
+  <button class="item">
+    <img class="image" src="/fileDownload?downname=op13-003" alt="image">
+    <p class="cardGet">[OPK-13] 부스터 팩 계승되는 의지
+    <p class="cardType">스테이지
+    <p class="cardColor">녹색
+    <p class="life">1
+    <p class="cardPoint">이스트 블루
+    <p class="cardCounter">-
+    <p class="animationType">원작
+    <p class="cardTrigger">
+    <p class="cardAttr">-
+    <p class="power">-
+    <p class="cardNumber">OP13-003
+    <p class="rarity">C
+    <p class="cardText">스테이지 효과
+    <p class="blockNumber">4
+    <p class="cardName">후샤 마을
+  </button>
+</div>
+"""
+
+
 class FakeHtmlResponse:
     def __init__(self, body: bytes, final_url: str, charset: str = "utf-8") -> None:
         self._body = body
@@ -204,6 +315,19 @@ class OnePieceCardScraperTests(unittest.TestCase):
 
         self.assertEqual([option.code for option in series_options], ["569101", "569102", "569026"])
         self.assertEqual(series_options[0].name, "BOOSTER PACK -ROMANCE DAWN- [OP-01]")
+
+    def test_discover_series_options_supports_korean_series_select(self):
+        series_options = discover_series_options(KOREAN_SERIES_INDEX_HTML)
+
+        self.assertEqual(
+            [option.code for option in series_options],
+            [
+                "[OPK-13] 부스터 팩 계승되는 의지",
+                "[STK-01] 스타트 덱 밀짚모자 일당",
+                "【프로모션】",
+            ],
+        )
+        self.assertEqual(series_options[0].name, "[OPK-13] 부스터 팩 계승되는 의지")
 
     def test_crawl_all_series_fetches_each_series(self):
         fetched_urls = []
@@ -235,6 +359,27 @@ class OnePieceCardScraperTests(unittest.TestCase):
                 build_cardlist_url(base_url=DEFAULT_BASE_URL, series="569026"),
             ],
         )
+
+    def test_crawl_all_series_follows_korean_pagination(self):
+        fetched_urls = []
+
+        def fake_fetcher(url, timeout_seconds):
+            fetched_urls.append(url)
+            if "page=2" in url:
+                return KOREAN_CARD_PAGE_3_HTML, url
+            if "page=1" in url:
+                return KOREAN_CARD_PAGE_2_HTML, url
+            if "series=%5BOPK-13%5D" in url:
+                return KOREAN_CARD_LIST_HTML, url
+            return KOREAN_SERIES_INDEX_HTML, url
+
+        cards = crawl_all_series(base_url="https://onepiece-cardgame.kr/cardlist.do", fetcher=fake_fetcher)
+
+        self.assertEqual([card.printing_id for card in cards], ["OP13-001", "OP13-001_P1", "OP13-002", "OP13-003"])
+        self.assertEqual(fetched_urls[0], "https://onepiece-cardgame.kr/cardlist.do")
+        self.assertIn("series=%5BOPK-13%5D", fetched_urls[1])
+        self.assertIn("page=1", fetched_urls[2])
+        self.assertIn("page=2", fetched_urls[3])
 
     def test_fetch_html_retries_transient_http_errors(self):
         calls = []
@@ -310,6 +455,46 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertIsNone(kuma.effect_text)
         self.assertEqual(kuma.trigger_text, "[Trigger] Play this card.")
         self.assertEqual(kuma.card_set_codes, ["OP-16", "EB-01"])
+
+    def test_parse_card_list_supports_korean_card_items(self):
+        cards = parse_card_list(
+            KOREAN_CARD_LIST_HTML,
+            source_url="https://onepiece-cardgame.kr/cardlist.do?series=%5BOPK-13%5D",
+        )
+
+        self.assertEqual(len(cards), 2)
+
+        leader = cards[0]
+        self.assertEqual(leader.printing_id, "OP13-001")
+        self.assertEqual(leader.card_no, "OP13-001")
+        self.assertEqual(leader.name, "몽키 D. 루피")
+        self.assertEqual(leader.card_type, "LEADER")
+        self.assertIsNone(leader.cost)
+        self.assertEqual(leader.life, 4)
+        self.assertEqual(leader.colors, ["적색", "녹색"])
+        self.assertEqual(leader.traits, ["초신성", "밀짚모자 일당"])
+        self.assertEqual(leader.attribute, "타격")
+        self.assertEqual(leader.power, 5000)
+        self.assertIsNone(leader.counter)
+        self.assertEqual(leader.effect_text, "【두웅!!×1】효과 텍스트")
+        self.assertIsNone(leader.trigger_text)
+        self.assertEqual(leader.card_set_codes, ["OPK-13"])
+        self.assertEqual(leader.card_sets, ["[OPK-13] 부스터 팩 계승되는 의지"])
+        self.assertFalse(leader.is_parallel)
+        self.assertEqual(
+            leader.image_url,
+            "https://onepiece-cardgame.kr/fileDownload?downname=op13-001",
+        )
+
+        parallel = cards[1]
+        self.assertEqual(parallel.printing_id, "OP13-001_P1")
+        self.assertEqual(parallel.card_no, "OP13-001")
+        self.assertEqual(parallel.card_type, "CHARACTER")
+        self.assertEqual(parallel.cost, 1)
+        self.assertIsNone(parallel.life)
+        self.assertEqual(parallel.counter, 2000)
+        self.assertEqual(parallel.trigger_text, "【트리거】파워 +3000.")
+        self.assertTrue(parallel.is_parallel)
 
     def test_write_jsonl_outputs_one_record_per_line(self):
         cards = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)
