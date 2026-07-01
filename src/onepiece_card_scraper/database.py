@@ -363,10 +363,11 @@ def _upsert_card_printing(
             is_parallel,
             foil_treatment,
             illustration_type,
+            detail_tags,
             image_url,
             source_url
         )
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (
             card_identity_id,
             card_set_id,
@@ -380,6 +381,7 @@ def _upsert_card_printing(
         do update
         set
             illustration_type = excluded.illustration_type,
+            detail_tags = excluded.detail_tags,
             image_url = excluded.image_url,
             source_url = excluded.source_url,
             updated_at = now()
@@ -394,6 +396,7 @@ def _upsert_card_printing(
             card.is_parallel,
             None,
             None,
+            card.detail_tags,
             card.image_url,
             card.source_url,
         ),

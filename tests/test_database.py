@@ -56,6 +56,14 @@ class DatabaseLoaderTests(unittest.TestCase):
         self.assertTrue(any("insert into rarities" in sql.lower() and params[0] == "SP_CARD" for sql, params in connection.statements))
         self.assertTrue(any("insert into card_sets" in sql.lower() and params[0] == "OP-16" for sql, params in connection.statements))
 
+        printing_params = [
+            params
+            for sql, params in connection.statements
+            if "insert into card_printings" in sql.lower()
+        ]
+        self.assertTrue(any("detail_tags" in sql.lower() for sql, _ in connection.statements))
+        self.assertTrue(any("PARALLEL" in tag for params in printing_params for tag in params if isinstance(tag, list)))
+
         identity_params = [
             params
             for sql, params in connection.statements
