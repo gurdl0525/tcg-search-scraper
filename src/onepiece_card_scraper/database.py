@@ -74,7 +74,7 @@ def load_cards_to_database(
         for card_set_code, card_set_name in card_sets:
             card_set_id = _upsert_card_set(connection, card_set_code, card_set_name)
             _upsert_card_set_translation(connection, card_set_id, language_code, card_set_name)
-            _upsert_card_printing(
+            printing_id = _upsert_card_printing(
                 connection=connection,
                 card=card,
                 identity_id=identity_id,
@@ -83,6 +83,7 @@ def load_cards_to_database(
                 language_code=language_code,
                 region_code=region_code,
             )
+            _replace_printing_illustrators(connection, printing_id, card.illustrators)
             printing_count += 1
 
     return LoadStats(cards=card_count, printings=printing_count)
@@ -341,6 +342,40 @@ def _replace_traits(connection, identity_id, traits: list[str]) -> None:
         )
 
 
+def _upsert_illustrator(connection, name: str):
+    return _fetch_id(
+        connection,
+        """
+        insert into illustrators (name)
+        values (%s)
+        on conflict (name) do update
+        set name = excluded.name,
+            updated_at = now()
+        returning id
+        """,
+        (name,),
+    )
+
+
+def _replace_printing_illustrators(connection, printing_id, illustrators: list[str]) -> None:
+    _execute(
+        connection,
+        "delete from card_printing_illustrators where card_printing_id = %s",
+        (printing_id,),
+    )
+    for illustrator in dict.fromkeys(name.strip() for name in illustrators if name.strip()):
+        illustrator_id = _upsert_illustrator(connection, illustrator)
+        _execute(
+            connection,
+            """
+            insert into card_printing_illustrators (card_printing_id, illustrator_id)
+            values (%s, %s)
+            on conflict do nothing
+            """,
+            (printing_id, illustrator_id),
+        )
+
+
 def _upsert_card_printing(
     connection,
     card: OnePieceCardPrinting,
@@ -349,8 +384,8 @@ def _upsert_card_printing(
     rarity_id,
     language_code: str,
     region_code: str | None,
-) -> None:
-    _execute(
+):
+    return _fetch_id(
         connection,
         """
         insert into card_printings (
@@ -385,6 +420,7 @@ def _upsert_card_printing(
             image_url = excluded.image_url,
             source_url = excluded.source_url,
             updated_at = now()
+        returning id
         """,
         (
             identity_id,

@@ -133,6 +133,17 @@ class DatabaseLoaderTests(unittest.TestCase):
         self.assertTrue(any(params[3] == "name" and params[4] == "word" and params[5] == "루피" for params in token_params))
         self.assertTrue(any(params[3] == "effect_text" and params[4] == "word" and params[5] == "효과" for params in token_params))
 
+    def test_load_cards_to_database_replaces_printing_illustrators(self):
+        card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
+        card.illustrators = ["Eiichiro Oda"]
+        connection = RecordingConnection()
+
+        load_cards_to_database(connection, [card], language_code="en")
+
+        self.assertTrue(any("insert into illustrators" in sql.lower() for sql, _ in connection.statements))
+        self.assertTrue(any("delete from card_printing_illustrators" in sql.lower() for sql, _ in connection.statements))
+        self.assertTrue(any("insert into card_printing_illustrators" in sql.lower() for sql, _ in connection.statements))
+
     def test_card_sets_for_uses_name_when_official_set_has_no_code(self):
         card = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)[0]
         card.card_sets = ["Offline Regional Participation Pack 2025 Vol.2"]
