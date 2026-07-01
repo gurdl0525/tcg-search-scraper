@@ -85,6 +85,8 @@ CSV_FIELDS = [
     "image_url",
     "source_url",
     "is_parallel",
+    "detail_tags",
+    "illustrators",
 ]
 
 
@@ -110,6 +112,8 @@ class OnePieceCardPrinting:
     image_url: str | None
     source_url: str
     is_parallel: bool
+    detail_tags: list[str]
+    illustrators: list[str]
 
     def to_record(self) -> dict[str, object]:
         return asdict(self)
@@ -137,6 +141,8 @@ class OnePieceCardPrinting:
             image_url=record["image_url"],
             source_url=str(record["source_url"]),
             is_parallel=bool(record["is_parallel"]),
+            detail_tags=list(record.get("detail_tags", [])),
+            illustrators=list(record.get("illustrators", [])),
         )
 
 
@@ -694,6 +700,8 @@ def _parse_modal_card(modal: Node, source_url: str) -> OnePieceCardPrinting:
         raise ValueError(f"Could not parse card info for modal id {printing_id!r}")
 
     card_no, rarity_code, card_type = info_values[:3]
+    rarity_code = _normalize_rarity(rarity_code)
+    is_parallel = bool(PARALLEL_ID_PATTERN.search(printing_id))
     name_node = modal.find_first(class_name="cardName")
     image_node = modal.find_first(tag="img")
     cost_node = modal.find_first(class_name="cost")
@@ -712,7 +720,7 @@ def _parse_modal_card(modal: Node, source_url: str) -> OnePieceCardPrinting:
         printing_id=printing_id,
         card_no=card_no,
         name=name_node.text_content() if name_node else "",
-        rarity_code=_normalize_rarity(rarity_code),
+        rarity_code=rarity_code,
         card_type=card_type.upper(),
         cost=cost,
         life=life,
@@ -728,13 +736,18 @@ def _parse_modal_card(modal: Node, source_url: str) -> OnePieceCardPrinting:
         card_set_codes=_extract_card_set_codes(_field_value(modal.find_first(class_name="getInfo"))),
         image_url=_image_url(image_node, source_url),
         source_url=source_url,
-        is_parallel=bool(PARALLEL_ID_PATTERN.search(printing_id)),
+        is_parallel=is_parallel,
+        detail_tags=_detail_tags(printing_id, rarity_code, is_parallel),
+        illustrators=[],
     )
 
 
 def _parse_korean_card_item(item: Node, source_url: str) -> OnePieceCardPrinting:
     printing_id = _korean_field(item, "cardNumber")
     card_type = _normalize_korean_card_type(_korean_field(item, "cardType"))
+    rarity_code = _normalize_rarity(_korean_field(item, "rarity"))
+    animation_type = _normalize_missing(_korean_field(item, "animationType"))
+    is_parallel = bool(PARALLEL_ID_PATTERN.search(printing_id))
     cost_or_life = _parse_int(_korean_field(item, "life"))
     cost = None if card_type == "LEADER" else cost_or_life
     life = cost_or_life if card_type == "LEADER" else None
@@ -745,7 +758,7 @@ def _parse_korean_card_item(item: Node, source_url: str) -> OnePieceCardPrinting
         printing_id=printing_id,
         card_no=PARALLEL_ID_PATTERN.sub("", printing_id),
         name=_korean_field(item, "cardName"),
-        rarity_code=_normalize_rarity(_korean_field(item, "rarity")),
+        rarity_code=rarity_code,
         card_type=card_type,
         cost=cost,
         life=life,
@@ -761,8 +774,30 @@ def _parse_korean_card_item(item: Node, source_url: str) -> OnePieceCardPrinting
         card_set_codes=_extract_card_set_codes(card_set),
         image_url=_image_url(image_node, source_url),
         source_url=source_url,
-        is_parallel=bool(PARALLEL_ID_PATTERN.search(printing_id)),
+        is_parallel=is_parallel,
+        detail_tags=_detail_tags(printing_id, rarity_code, is_parallel, animation_type),
+        illustrators=[],
     )
+
+
+def _detail_tags(
+    printing_id: str,
+    rarity_code: str,
+    is_parallel: bool,
+    animation_type: str | None = None,
+) -> list[str]:
+    tags = []
+    normalized_rarity = rarity_code.upper()
+    normalized_animation = (animation_type or "").upper()
+    if is_parallel:
+        tags.append("PARALLEL")
+    if normalized_rarity in {"SP", "SP_CARD"} or "SP" in normalized_animation:
+        tags.append("SP")
+    if "MANGA" in normalized_animation or "漫画" in normalized_animation or "만화" in normalized_animation:
+        tags.append("MANGA")
+    if "PROMO" in normalized_rarity or "PROMO" in normalized_animation or "프로모" in normalized_animation:
+        tags.append("PROMO")
+    return list(dict.fromkeys(tags))
 
 
 def _find_korean_series_select(root: Node) -> Node | None:

@@ -442,6 +442,8 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertIsNone(ace.trigger_text)
         self.assertEqual(ace.card_set_codes, ["OP-16"])
         self.assertTrue(ace.is_parallel)
+        self.assertEqual(ace.detail_tags, ["PARALLEL"])
+        self.assertEqual(ace.illustrators, [])
         self.assertEqual(
             ace.image_url,
             "https://en.onepiece-cardgame.com/images/cardlist/card/OP16-001_p1.png?260616",
@@ -455,6 +457,8 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertIsNone(kuma.effect_text)
         self.assertEqual(kuma.trigger_text, "[Trigger] Play this card.")
         self.assertEqual(kuma.card_set_codes, ["OP-16", "EB-01"])
+        self.assertEqual(kuma.detail_tags, ["PARALLEL", "SP"])
+        self.assertEqual(kuma.illustrators, [])
 
     def test_parse_card_list_supports_korean_card_items(self):
         cards = parse_card_list(
@@ -481,6 +485,8 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertEqual(leader.card_set_codes, ["OPK-13"])
         self.assertEqual(leader.card_sets, ["[OPK-13] 부스터 팩 계승되는 의지"])
         self.assertFalse(leader.is_parallel)
+        self.assertEqual(leader.detail_tags, [])
+        self.assertEqual(leader.illustrators, [])
         self.assertEqual(
             leader.image_url,
             "https://onepiece-cardgame.kr/fileDownload?downname=op13-001",
@@ -495,6 +501,8 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertEqual(parallel.counter, 2000)
         self.assertEqual(parallel.trigger_text, "【트리거】파워 +3000.")
         self.assertTrue(parallel.is_parallel)
+        self.assertEqual(parallel.detail_tags, ["PARALLEL"])
+        self.assertEqual(parallel.illustrators, [])
 
     def test_write_jsonl_outputs_one_record_per_line(self):
         cards = parse_card_list(SAMPLE_HTML, source_url=SOURCE_URL)
