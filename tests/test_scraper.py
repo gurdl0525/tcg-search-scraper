@@ -501,7 +501,7 @@ class OnePieceCardScraperTests(unittest.TestCase):
         self.assertEqual(parallel.counter, 2000)
         self.assertEqual(parallel.trigger_text, "【트리거】파워 +3000.")
         self.assertTrue(parallel.is_parallel)
-        self.assertEqual(parallel.detail_tags, ["PARALLEL"])
+        self.assertEqual(parallel.detail_tags, ["PARALLEL", "MANGA"])
         self.assertEqual(parallel.illustrators, [])
 
     def test_write_jsonl_outputs_one_record_per_line(self):

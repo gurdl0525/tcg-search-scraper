@@ -793,7 +793,12 @@ def _detail_tags(
         tags.append("PARALLEL")
     if normalized_rarity in {"SP", "SP_CARD"} or "SP" in normalized_animation:
         tags.append("SP")
-    if "MANGA" in normalized_animation or "漫画" in normalized_animation or "만화" in normalized_animation:
+    if (
+        "MANGA" in normalized_animation
+        or "漫画" in normalized_animation
+        or "만화" in normalized_animation
+        or "원작" in normalized_animation
+    ):
         tags.append("MANGA")
     if "PROMO" in normalized_rarity or "PROMO" in normalized_animation or "프로모" in normalized_animation:
         tags.append("PROMO")
